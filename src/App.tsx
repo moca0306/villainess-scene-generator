@@ -264,9 +264,9 @@ const App: React.FC = () => {
             Nano Banana 2
           </span>
 
-          {/* コスト表示（トータル：画像生成 + テキストAPI） */}
+          {/* コスト表示（内訳付き：AI選定 + 画像生成 = トータル） */}
           {panels.length > 0 && (
-            <div className="text-[10px] text-right leading-tight">
+            <div className="text-[10px] text-right leading-tight space-y-0.5">
               <div className="text-white/30">
                 見積: <span className="text-yellow-400 font-bold">¥{totalEstimateJPY.toLocaleString()}</span>
                 <span className="text-white/20 ml-1">(${totalEstimateUSD.toFixed(2)})</span>
@@ -277,6 +277,12 @@ const App: React.FC = () => {
                   <span className="ml-1">(${totalSpentUSD.toFixed(2)})</span>
                 </div>
               )}
+              <div className="text-white/15 text-[9px] flex gap-2 justify-end">
+                {textApiCostUSD > 0 && (
+                  <span>AI選定: ${textApiCostUSD.toFixed(3)}</span>
+                )}
+                <span>画像: ${doneCount > 0 ? imgDoneUSD.toFixed(2) : imgEstimateUSD.toFixed(2)}{doneCount === 0 ? '(見積)' : ''}</span>
+              </div>
             </div>
           )}
 
