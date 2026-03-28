@@ -12,6 +12,7 @@ export interface ScriptRow {
 export interface Character {
   name: string;
   imageUrl?: string; // アップロードされたキャラシート（base64）
+  appearance?: string; // AI解析済みの外見テキスト（髪色、目の色、服装等）
 }
 
 /** 構図テクニック（アニメ私塾PDFベース） */
@@ -58,5 +59,3 @@ export interface Panel {
   imageUrl?: string;
 }
 
-/** 画像モデル */
-export type ImageModel = 'flash' | 'pro';

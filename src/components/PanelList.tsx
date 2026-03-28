@@ -6,6 +6,7 @@ interface Props {
   onRegenerate: (id: number) => void;
   onDownload: (url: string, id: number) => void;
   onPreview: (url: string) => void;
+  onPromptEdit: (id: number, prompt: string) => void;
 }
 
 const COMP_COLORS: Record<string, string> = {
@@ -23,8 +24,10 @@ const COMP_COLORS: Record<string, string> = {
   extreme_closeup_emotion: 'bg-pink-500/15 text-pink-400',
 };
 
-const PanelList: React.FC<Props> = ({ panels, onRegenerate, onDownload, onPreview }) => {
+const PanelList: React.FC<Props> = ({ panels, onRegenerate, onDownload, onPreview, onPromptEdit }) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState('');
 
   // シーンでグループ化
   const groups: { scene: string; panels: Panel[] }[] = [];
@@ -94,8 +97,14 @@ const PanelList: React.FC<Props> = ({ panels, onRegenerate, onDownload, onPrevie
                       </button>
                     </div>
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center text-white/10 text-[10px]">
-                      待機中
+                    <div className="w-full h-full flex flex-col items-center justify-center gap-2">
+                      <span className="text-white/10 text-[10px]">待機中</span>
+                      <button
+                        onClick={() => onRegenerate(p.id)}
+                        className="text-[10px] px-3 py-1 rounded-full bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-all font-bold"
+                      >
+                        生成
+                      </button>
                     </div>
                   )}
                 </div>
@@ -119,10 +128,10 @@ const PanelList: React.FC<Props> = ({ panels, onRegenerate, onDownload, onPrevie
                   <p className="text-[10px] text-white/25 line-clamp-2">{p.situation}</p>
 
                   {p.dialogue && (
-                    <p className="text-[10px] text-purple-300/50 truncate">「{p.dialogue}」</p>
+                    <p className="text-[10px] text-purple-300/50 whitespace-pre-wrap">「{p.dialogue}」</p>
                   )}
 
-                  {/* プロンプト展開 */}
+                  {/* プロンプト展開・編集 */}
                   <button
                     onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
                     className="text-[9px] text-white/20 hover:text-white/40 transition-colors"
@@ -130,9 +139,37 @@ const PanelList: React.FC<Props> = ({ panels, onRegenerate, onDownload, onPrevie
                     {expandedId === p.id ? 'プロンプト ▲' : 'プロンプト ▼'}
                   </button>
                   {expandedId === p.id && (
-                    <pre className="text-[9px] text-white/20 bg-white/[0.03] p-2 rounded-lg overflow-auto max-h-40 whitespace-pre-wrap font-mono">
-                      {p.prompt}
-                    </pre>
+                    editingId === p.id ? (
+                      <div className="space-y-1">
+                        <textarea
+                          value={editDraft}
+                          onChange={e => setEditDraft(e.target.value)}
+                          className="w-full text-[9px] text-white/60 bg-white/[0.06] p-2 rounded-lg overflow-auto max-h-60 min-h-[80px] whitespace-pre-wrap font-mono border border-purple-500/30 focus:outline-none focus:border-purple-500/60 resize-y"
+                        />
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => { onPromptEdit(p.id, editDraft); setEditingId(null); }}
+                            className="text-[9px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30"
+                          >
+                            保存
+                          </button>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="text-[9px] px-2 py-0.5 rounded bg-white/5 text-white/30 hover:bg-white/10"
+                          >
+                            キャンセル
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => { setEditingId(p.id); setEditDraft(p.prompt); }}
+                        className="text-[9px] text-white/20 bg-white/[0.03] p-2 rounded-lg overflow-auto max-h-40 whitespace-pre-wrap font-mono cursor-pointer hover:bg-white/[0.06] hover:text-white/30 transition-colors"
+                        title="クリックで編集"
+                      >
+                        {p.prompt}
+                      </div>
+                    )
                   )}
                 </div>
               </div>

@@ -152,6 +152,95 @@ const detectComposition = (situation: string, shotType: ShotType, prevComp?: Com
 };
 
 // ================================================================
+// 3.5. カラーパレット自動選択（感情→色の連動）
+// ================================================================
+
+type ColorMood = 'warm_golden' | 'cold_blue' | 'dramatic_red' | 'soft_pink' | 'dark_ominous' | 'neutral_elegant' | 'dawn_hope' | 'sunset_melancholy';
+
+const COLOR_PROMPTS: Record<ColorMood, string> = {
+  warm_golden:
+    'Color palette: WARM GOLDEN tones. Candlelight amber, honey gold highlights, soft orange glow. Feels safe, happy, luxurious.',
+  cold_blue:
+    'Color palette: COLD BLUE tones. Pale moonlight, icy blue shadows, desaturated colors. Feels lonely, tense, threatening.',
+  dramatic_red:
+    'Color palette: DRAMATIC RED-PURPLE tones. Deep crimson accents, rich purple shadows, high contrast. Feels powerful, intense, climactic.',
+  soft_pink:
+    'Color palette: SOFT PINK-ROSE tones. Blush pink highlights, gentle lavender, warm white. Feels romantic, tender, gentle.',
+  dark_ominous:
+    'Color palette: DARK OMINOUS tones. Deep shadows, muted greens and grays, minimal light. Feels dangerous, secretive, oppressive.',
+  neutral_elegant:
+    'Color palette: NEUTRAL ELEGANT tones. Cream whites, soft grays, subtle gold accents. Feels refined, calm, sophisticated.',
+  dawn_hope:
+    'Color palette: DAWN/SUNRISE tones. Soft orange-pink sky bleeding into light blue, gentle rays. Feels hopeful, fresh, new beginning.',
+  sunset_melancholy:
+    'Color palette: SUNSET MELANCHOLY tones. Deep orange fading to purple, long warm shadows. Feels bittersweet, reflective, transitional.',
+};
+
+const detectColorMood = (situation: string): ColorMood => {
+  const s = situation;
+
+  const rules: [RegExp, ColorMood][] = [
+    // 怒り・断罪・覚醒・逆転 → 赤紫の劇的な色
+    [/怒り|激怒|断罪|糾弾|覚醒|逆転|ざまぁ|見返|力を|爆発|炎/, 'dramatic_red'],
+    // 恐怖・不安・陰謀・追い詰め → 暗い不穏な色
+    [/恐怖|不安|陰謀|企み|追い詰|闇|毒|罠|裏切|策略|密か|覗/, 'dark_ominous'],
+    // 悲しみ・孤立・絶望 → 冷たい青
+    [/涙|泣|悲し|絶望|孤立|孤独|冷たい|見捨て|崩れ落ち|追放/, 'cold_blue'],
+    // 恋愛・照れ・好意 → 柔らかいピンク
+    [/ロマン|愛|好き|頬を赤|照れ|キス|手を繋|ドキ|見つめ合|告白/, 'soft_pink'],
+    // 希望・決意・再出発 → 夜明けの色
+    [/決意|希望|立ち上が|新しい|始ま|誓|目覚め|光が|朝/, 'dawn_hope'],
+    // 別れ・回想・感慨 → 夕暮れの色
+    [/別れ|去って|背を向|回想|思い出|最後|終わり|さよなら/, 'sunset_melancholy'],
+    // 幸せ・華やか・舞踏会 → 暖色ゴールド
+    [/幸せ|楽しそう|華やか|舞踏会|パーティ|笑顔|微笑|宴|歓声|紅茶|穏やか/, 'warm_golden'],
+  ];
+
+  for (const [re, mood] of rules) {
+    if (re.test(s)) return mood;
+  }
+
+  return 'neutral_elegant';
+};
+
+// ================================================================
+// 3.7. 状況説明からの具体的フレーミング指示抽出
+// ================================================================
+// 状況説明に書かれた具体的な画角指示（「口元アップ」「背中越し」等）を
+// 自動構図選択より優先して反映する。プロの構図テクニックは維持しつつ、
+// シナリオライターの演出意図を尊重する。
+
+type FramingCue = {
+  match: RegExp;
+  directive: string;
+};
+
+const FRAMING_CUES: FramingCue[] = [
+  // 部位アップ系
+  { match: /口元[のが]?アップ|口元をアップ/, directive: 'FRAMING OVERRIDE: Frame a CLOSE-UP of the CHARACTER\'S MOUTH/LIPS filling the center of the frame. Show from nose to chin. Eyes may be partially visible at top edge but the MOUTH is the focal point.' },
+  { match: /目[のが]?アップ|瞳[のが]?アップ|目を[大]?きく/, directive: 'FRAMING OVERRIDE: Frame a CLOSE-UP of the CHARACTER\'S EYES filling the center of the frame. Show from forehead to nose bridge. The EYES/PUPILS are the focal point.' },
+  { match: /手[のが]?アップ|手元[のが]?アップ|握り[しめ締]/, directive: 'FRAMING OVERRIDE: Frame a CLOSE-UP of the CHARACTER\'S HANDS. Hands should fill the majority of the frame.' },
+  { match: /涙[のが]?アップ|一粒の涙|涙が[一]?筋/, directive: 'FRAMING OVERRIDE: Frame an EXTREME CLOSE-UP showing a TEAR rolling down the cheek. The tear drop is the focal point.' },
+  { match: /横顔[のが]?アップ|横顔/, directive: 'FRAMING OVERRIDE: Frame the character\'s SIDE PROFILE (横顔). Camera is perpendicular to the face, showing one eye, nose bridge, and jawline.' },
+  { match: /後ろ姿|背中[のが]?アップ|背を向け/, directive: 'FRAMING OVERRIDE: Show the character FROM BEHIND. Camera faces the character\'s back. Face is NOT visible or only slightly turned.' },
+  // 特殊フレーミング
+  { match: /タイトルロゴ/, directive: 'FRAMING OVERRIDE: Leave clear NEGATIVE SPACE (approximately 30% of frame) for title logo placement. Compose so the main subject does not occupy the area where text would go.' },
+  { match: /[二2]人[の]?(?:間|距離|関係)/, directive: 'FRAMING OVERRIDE: Frame BOTH characters with deliberate SPACE or DISTANCE between them to emphasize their relationship dynamic.' },
+  { match: /見上げ[るて]|上を向/, directive: 'FRAMING OVERRIDE: Character is LOOKING UPWARD. Camera captures the upward gaze, possibly from slightly below.' },
+  { match: /見下ろ[すし]/, directive: 'FRAMING OVERRIDE: Character is LOOKING DOWN at something/someone. Show the downward gaze with appropriate camera angle.' },
+];
+
+const extractFramingOverrides = (situation: string): string[] => {
+  const overrides: string[] = [];
+  for (const cue of FRAMING_CUES) {
+    if (cue.match.test(situation)) {
+      overrides.push(cue.directive);
+    }
+  }
+  return overrides;
+};
+
+// ================================================================
 // 4. プロンプトビルダー
 // ================================================================
 
@@ -185,10 +274,10 @@ const COMPOSITION_PROMPTS: Record<Composition, string> = {
 const SHOT_PROMPTS: Record<ShotType, string> = {
   establishing: 'Wide establishing shot showing the full location/exterior. Architecture and atmosphere emphasized. Characters small or absent.',
   long: 'Long/full shot showing characters head-to-toe in environment. Body language and spatial relationships visible.',
-  medium: 'Medium shot from waist up. Upper body expression and hand gestures visible.',
-  closeup: 'Close-up on face and upper chest. Facial expression and emotion emphasized.',
-  extreme_closeup: 'EXTREME close-up on specific detail (eyes, hands, tears). Maximum emotional impact.',
-  object: 'Object/item focus. Shallow depth of field. Detailed rendering.',
+  medium: 'Medium shot CROPPED from waist up. The character fills at least 50% of the frame height. Upper body, face, and hand gestures clearly visible.',
+  closeup: 'CLOSE-UP shot CROPPED from shoulders/neck up. The character\'s FACE fills at least 60-70% of the frame. Focus on facial expression, eyes, and emotion. Background is BLURRED and minimal. Do NOT show full body.',
+  extreme_closeup: 'EXTREME close-up filling 80-90% of the frame with a single feature (eyes, lips, hands, tears). Almost NO background visible. Maximum EMOTIONAL IMPACT. This is the tightest possible crop.',
+  object: 'Object/item focus filling most of the frame. Shallow depth of field. Detailed rendering. Background heavily blurred.',
 };
 
 const MASTER_RULES = `ABSOLUTE RULES:
@@ -201,7 +290,15 @@ const MASTER_RULES = `ABSOLUTE RULES:
 - Rich detailed backgrounds with atmospheric lighting
 - 16:9 widescreen cinematic aspect ratio`;
 
-const ART_STYLE = `High-quality cinematic anime style. Rich detailed backgrounds with atmospheric lighting and color storytelling. Dramatic color grading: warm golden highlights, cool blue shadows. Professional digital painting with clean linework. Fantasy European aristocratic setting. Expressive anime eyes.`;
+const ART_STYLE = `High-quality cinematic JAPANESE ANIME style (2D hand-drawn aesthetic). Rich detailed backgrounds with atmospheric lighting and color storytelling. Dramatic color grading: warm golden highlights, cool blue shadows. Professional digital painting with clean linework. Fantasy European aristocratic setting. Expressive anime eyes.
+
+STYLE LOCK — NEVER deviate from the reference images' art style:
+- MUST be 2D Japanese anime style throughout
+- NEVER realistic, photorealistic, 3D render, CGI, or live-action
+- NEVER Disney, Pixar, Dreamworks, or Western cartoon style
+- NEVER chibi, super-deformed, or simplified style
+- Maintain CONSISTENT character proportions, face shape, and eye style across all frames
+- If reference images are provided, treat their art style as the ABSOLUTE authority`;
 
 export const buildPrompt = (
   situation: string,
@@ -210,23 +307,50 @@ export const buildPrompt = (
   characterNames: string[],
   characters: Character[],
 ): string => {
-  // キャラの外見情報を構築
+  // キャラの外見情報を構築（画像参照 + テキスト外見描写の二重指定）
+  const getChar = (name: string) => characters.find(ch => ch.name === name);
   const charDescriptions = characterNames
     .map(name => {
-      const c = characters.find(ch => ch.name === name);
-      return c ? `${name} (reference image attached)` : name;
+      const c = getChar(name);
+      if (c?.imageUrl) {
+        const base = `${name} (reference image attached — match design EXACTLY)`;
+        // 外見テキストがあれば追加（髪色等を明示的に指定）
+        return c.appearance ? `${base}\n  Visual details: ${c.appearance}` : base;
+      }
+      // キャラシートなし（モブ等）: スタイル参照がある旨を明記
+      const anySheetExists = characters.some(ch => ch.imageUrl);
+      return anySheetExists
+        ? `${name} (NO character sheet — design this character to match the ART STYLE of the reference images, but as a DIFFERENT character)`
+        : name;
     })
-    .join(', ');
+    .join('\n');
+
+  const colorMood = detectColorMood(situation);
+
+  // アップ系ショットの場合、背景レイヤーのルールを上書き
+  const isCloseShot = shotType === 'closeup' || shotType === 'extreme_closeup' || shotType === 'object';
+  const frameOverride = isCloseShot
+    ? '\n- OVERRIDE: For this close-up shot, IGNORE the foreground/middle/background layer rule. The CHARACTER\'S FACE or DETAIL must DOMINATE the frame. Background should be BLURRED or MINIMAL.'
+    : '';
+
+  // 状況説明から具体的なフレーミング指示を抽出（シナリオの演出意図を最優先）
+  const framingOverrides = extractFramingOverrides(situation);
+  const framingSection = framingOverrides.length > 0
+    ? `\n\n【CRITICAL — SCENARIO FRAMING DIRECTIVES (HIGHEST PRIORITY)】\nThe following directives come directly from the scenario and OVERRIDE generic shot type instructions when they conflict:\n${framingOverrides.join('\n')}`
+    : '';
 
   return `Professional anime scene — single frame, NO text.
 
-${MASTER_RULES}
+${MASTER_RULES}${frameOverride}
 
 【COMPOSITION】
 ${COMPOSITION_PROMPTS[composition]}
 
-【SHOT TYPE】
-${SHOT_PROMPTS[shotType]}
+【SHOT TYPE — THIS IS THE MOST IMPORTANT INSTRUCTION FOR FRAMING】
+${SHOT_PROMPTS[shotType]}${framingSection}
+
+【COLOR DIRECTION】
+${COLOR_PROMPTS[colorMood]}
 
 【SCENE DESCRIPTION】
 ${situation}
@@ -246,13 +370,24 @@ export const buildPanels = (rows: ScriptRow[], characters: Character[]): Panel[]
   const panels: Panel[] = [];
   let prevComp: Composition | undefined;
 
+  // 全キャラ名リストを収集（状況列からのキャラ検出に使う）
+  const allCharNames = Array.from(new Set(
+    rows.map(r => r.character.replace(/[（(].+?[）)]/g, '').trim()).filter(Boolean)
+  ));
+
   for (const row of rows) {
     // 状況がない行（セリフのみ）はスキップ — 画像不要
     if (!row.situation || row.situation.length < 3) continue;
 
-    // キャラ名を正規化
+    // キャラ名を正規化（character列 + 状況列から複数キャラを検出）
     const charBase = row.character.replace(/[（(].+?[）)]/g, '').trim();
-    const charNames = charBase ? [charBase] : [];
+    const charNamesSet = new Set<string>();
+    if (charBase) charNamesSet.add(charBase);
+    // 状況列に登場する他のキャラ名も検出
+    for (const name of allCharNames) {
+      if (name && row.situation.includes(name)) charNamesSet.add(name);
+    }
+    const charNames = Array.from(charNamesSet);
 
     // 自動判定
     const shotType = detectShotType(row.situation, row.character);

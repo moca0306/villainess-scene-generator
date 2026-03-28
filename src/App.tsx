@@ -1,17 +1,15 @@
 import React, { useState, useRef, useCallback } from 'react';
 import JSZip from 'jszip';
-import { Character, Panel, ImageModel } from './types';
+import { Character, Panel, ScriptRow } from './types';
 import { parseCSV, extractCharacterNames, buildPanels } from './services/engine';
-import { generate, setModel } from './services/imageGen';
+import { generate } from './services/imageGen';
+import { selectScenes } from './services/sceneSelector';
 import CharacterSetup from './components/CharacterSetup';
 import PanelList from './components/PanelList';
 import ImagePreview from './components/ImagePreview';
 
-// 1枚あたりのコスト（USD、1K解像度）
-const COST_PER_IMAGE: Record<ImageModel, number> = {
-  flash: 0.067,  // Nano Banana 2
-  pro: 0.134,    // Nano Banana Pro
-};
+// 1枚あたりのコスト（USD、Nano Banana 2 = gemini-3.1-flash-image-preview）
+const COST_PER_IMAGE = 0.067;
 const USD_TO_JPY = 150; // おおよそのレート
 
 const App: React.FC = () => {
@@ -20,26 +18,45 @@ const App: React.FC = () => {
   const [panels, setPanels] = useState<Panel[]>([]);
   const [csvLoaded, setCsvLoaded] = useState(false);
   const [csvName, setCsvName] = useState('');
-  const [imageModelSel, setImageModelSel] = useState<ImageModel>('flash');
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const [allRows, setAllRows] = useState<ScriptRow[]>([]);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [targetCount, setTargetCount] = useState(150);
+  const [textApiCostUSD, setTextApiCostUSD] = useState(0); // AI選定のテキストAPIコスト累計
   const stopRef = useRef(false);
+  const pauseRef = useRef(false);
 
-  // ── CSV読み込み ──
+  // ── CSV読み込み → 自動AI選定 ──
   const handleCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onloadend = () => {
+    reader.onloadend = async () => {
       const text = reader.result as string;
       const rows = parseCSV(text);
       const names = extractCharacterNames(rows);
       setCharacters(names.map(n => ({ name: n })));
-      // パネルはキャラシートアップロード後に構築するのでここではrowsだけ保持
-      setPanels(buildPanels(rows, []));
+      setAllRows(rows);
       setCsvLoaded(true);
       setCsvName(file.name);
+
+      // 自動でAI選定を実行
+      setIsSelecting(true);
+      setPanels([]); // 選定完了まで空にしておく
+      try {
+        const result = await selectScenes(rows, targetCount);
+        const filteredRows = rows.filter(r => result.selectedIds.includes(r.no));
+        setPanels(buildPanels(filteredRows, []));
+        setTextApiCostUSD(prev => prev + result.costUSD);
+      } catch (err) {
+        console.error('AI selection failed:', err);
+        // 失敗時は全件表示
+        setPanels(buildPanels(rows, []));
+      }
+      setIsSelecting(false);
     };
     reader.readAsText(file, 'utf-8');
     e.target.value = '';
@@ -69,31 +86,76 @@ const App: React.FC = () => {
     });
   };
 
-  // ── モデル変更 ──
-  const handleModelChange = (m: ImageModel) => {
-    setImageModelSel(m);
-    setModel(m);
+  // ── AI厳選 ──
+  const handleAISelect = async () => {
+    if (allRows.length === 0) return;
+    setIsSelecting(true);
+    try {
+      const result = await selectScenes(allRows, targetCount);
+      const filteredRows = allRows.filter(r => result.selectedIds.includes(r.no));
+      setPanels(buildPanels(filteredRows, characters));
+      setTextApiCostUSD(prev => prev + result.costUSD);
+    } catch (err) {
+      console.error('AI selection failed:', err);
+      alert('AI選定に失敗しました。全シーンのまま続行します。');
+    }
+    setIsSelecting(false);
   };
+
+  // ── リファレンス画像収集（状況列に登場する全キャラのシートを収集） ──
+  const collectRefs = (panel: Panel): string[] => {
+    const refs: string[] = [];
+    const charBase = panel.character.replace(/[（(].+?[）)]/g, '').trim();
+
+    // character列のキャラ + 状況列に名前が出てくるキャラ全員のシートを収集
+    const mentionedNames = new Set<string>();
+    if (charBase) mentionedNames.add(charBase);
+    for (const c of characters) {
+      if (c.name && panel.situation.includes(c.name)) mentionedNames.add(c.name);
+    }
+
+    for (const name of mentionedNames) {
+      const sheet = characters.find(c => c.imageUrl && c.name === name);
+      if (sheet) refs.push(sheet.imageUrl!);
+    }
+
+    // 誰のシートも見つからなければスタイル参照として1枚渡す
+    if (refs.length === 0) {
+      const styleRef = characters.find(c => c.imageUrl);
+      if (styleRef) refs.push(styleRef.imageUrl!);
+    }
+
+    return refs;
+  };
+
+  // ── 一時停止中にresolveを待つユーティリティ ──
+  const waitWhilePaused = () => new Promise<void>(resolve => {
+    const check = () => {
+      if (stopRef.current) { resolve(); return; }
+      if (!pauseRef.current) { resolve(); return; }
+      setTimeout(check, 200);
+    };
+    check();
+  });
 
   // ── 全コマ生成 ──
   const handleGenerateAll = useCallback(async () => {
     const targets = panels.filter(p => p.status !== 'done');
     if (targets.length === 0) return;
     setIsGenerating(true);
+    setIsPaused(false);
     stopRef.current = false;
+    pauseRef.current = false;
     setProgress({ done: 0, total: targets.length });
 
     for (let i = 0; i < targets.length; i++) {
+      await waitWhilePaused();
       if (stopRef.current) break;
       const panel = targets[i];
 
       setPanels(prev => prev.map(p => p.id === panel.id ? { ...p, status: 'generating' } : p));
 
-      // リファレンス画像を収集
-      const charBase = panel.character.replace(/[（(].+?[）)]/g, '').trim();
-      const refs = characters
-        .filter(c => c.imageUrl && c.name === charBase)
-        .map(c => c.imageUrl!);
+      const refs = collectRefs(panel);
 
       try {
         const url = await generate(panel.prompt, refs.length > 0 ? refs : undefined);
@@ -113,6 +175,7 @@ const App: React.FC = () => {
     }
 
     setIsGenerating(false);
+    setIsPaused(false);
   }, [panels, characters]);
 
   // ── 1コマ再生成 ──
@@ -122,10 +185,7 @@ const App: React.FC = () => {
 
     setPanels(prev => prev.map(p => p.id === id ? { ...p, status: 'generating' } : p));
 
-    const charBase = panel.character.replace(/[（(].+?[）)]/g, '').trim();
-    const refs = characters
-      .filter(c => c.imageUrl && c.name === charBase)
-      .map(c => c.imageUrl!);
+    const refs = collectRefs(panel);
 
     try {
       const url = await generate(panel.prompt, refs.length > 0 ? refs : undefined);
@@ -137,8 +197,17 @@ const App: React.FC = () => {
     }
   }, [panels, characters]);
 
+  // ── プロンプト編集 ──
+  const handlePromptEdit = (id: number, prompt: string) => {
+    setPanels(prev => prev.map(p => p.id === id ? { ...p, prompt } : p));
+  };
+
+  // ── 一時停止/再開 ──
+  const handlePause = () => { pauseRef.current = true; setIsPaused(true); };
+  const handleResume = () => { pauseRef.current = false; setIsPaused(false); };
+
   // ── 停止 ──
-  const handleStop = () => { stopRef.current = true; setIsGenerating(false); };
+  const handleStop = () => { stopRef.current = true; pauseRef.current = false; setIsGenerating(false); setIsPaused(false); };
 
   // ── ZIP一括DL ──
   const handleDownloadZip = async () => {
@@ -170,14 +239,14 @@ const App: React.FC = () => {
   };
 
   const doneCount = panels.filter(p => p.status === 'done').length;
-  const remainingCount = panels.filter(p => p.status !== 'done').length;
 
-  // コスト計算
-  const costPerImage = COST_PER_IMAGE[imageModelSel];
-  const costDoneUSD = doneCount * costPerImage;
-  const costTotalUSD = panels.length * costPerImage;
-  const costDoneJPY = Math.round(costDoneUSD * USD_TO_JPY);
-  const costTotalJPY = Math.round(costTotalUSD * USD_TO_JPY);
+  // コスト計算（画像生成 + テキストAPI = トータル）
+  const imgDoneUSD = doneCount * COST_PER_IMAGE;
+  const imgEstimateUSD = panels.length * COST_PER_IMAGE;
+  const totalSpentUSD = imgDoneUSD + textApiCostUSD;
+  const totalEstimateUSD = imgEstimateUSD + textApiCostUSD;
+  const totalSpentJPY = Math.round(totalSpentUSD * USD_TO_JPY);
+  const totalEstimateJPY = Math.round(totalEstimateUSD * USD_TO_JPY);
 
   // ================================================================
   // UI
@@ -190,36 +259,22 @@ const App: React.FC = () => {
           悪役令嬢シーンジェネレーター
         </h1>
         <div className="flex items-center gap-3">
-          {/* モデル切替 */}
-          <div className="flex items-center gap-1 text-[10px]">
-            {(['flash', 'pro'] as ImageModel[]).map(m => (
-              <button
-                key={m}
-                onClick={() => handleModelChange(m)}
-                className={`px-3 py-1 rounded-full font-bold transition-all ${
-                  imageModelSel === m
-                    ? m === 'flash'
-                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                      : 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                    : 'text-white/30 hover:text-white/50'
-                }`}
-              >
-                {m === 'flash' ? 'Nano Banana 2' : 'Nano Banana Pro'}
-              </button>
-            ))}
-          </div>
+          {/* モデル表示 */}
+          <span className="text-[10px] px-3 py-1 rounded-full font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">
+            Nano Banana 2
+          </span>
 
-          {/* コスト表示 */}
+          {/* コスト表示（トータル：画像生成 + テキストAPI） */}
           {panels.length > 0 && (
             <div className="text-[10px] text-right leading-tight">
               <div className="text-white/30">
-                全{panels.length}枚: <span className="text-yellow-400 font-bold">¥{costTotalJPY.toLocaleString()}</span>
-                <span className="text-white/20 ml-1">(${costTotalUSD.toFixed(2)})</span>
+                見積: <span className="text-yellow-400 font-bold">¥{totalEstimateJPY.toLocaleString()}</span>
+                <span className="text-white/20 ml-1">(${totalEstimateUSD.toFixed(2)})</span>
               </div>
-              {doneCount > 0 && (
+              {(doneCount > 0 || textApiCostUSD > 0) && (
                 <div className="text-white/20">
-                  使用済: <span className="text-yellow-400/70">¥{costDoneJPY.toLocaleString()}</span>
-                  <span className="ml-1">(${costDoneUSD.toFixed(2)})</span>
+                  使用済: <span className="text-yellow-400/70">¥{totalSpentJPY.toLocaleString()}</span>
+                  <span className="ml-1">(${totalSpentUSD.toFixed(2)})</span>
                 </div>
               )}
             </div>
@@ -233,9 +288,23 @@ const App: React.FC = () => {
 
           {panels.length > 0 && (
             isGenerating ? (
-              <button onClick={handleStop} className="btn bg-red-600 text-white animate-pulse">
-                停止 ({progress.done}/{progress.total})
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-white/40">
+                  {progress.done}/{progress.total}
+                </span>
+                {isPaused ? (
+                  <button onClick={handleResume} className="btn bg-green-600 text-white">
+                    再開
+                  </button>
+                ) : (
+                  <button onClick={handlePause} className="btn bg-yellow-600 text-white">
+                    一時停止
+                  </button>
+                )}
+                <button onClick={handleStop} className="btn bg-red-600 text-white">
+                  停止
+                </button>
+              </div>
             ) : (
               <button onClick={handleGenerateAll} className="btn btn-primary">
                 全コマ生成 ({panels.filter(p => p.status !== 'done').length}枚)
@@ -268,9 +337,48 @@ const App: React.FC = () => {
               )}
             </div>
 
+            {/* AI厳選（自動実行済み。枚数変更して再選定可能） */}
+            {csvLoaded && allRows.length > 0 && panels.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest block">
+                  2. AI厳選（YouTube用）
+                </label>
+                <p className="text-[10px] text-purple-400">
+                  {allRows.length}件 → {panels.length}件に厳選済み
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={targetCount}
+                    onChange={e => setTargetCount(Math.max(1, parseInt(e.target.value) || 150))}
+                    className="w-16 text-xs text-center bg-white/[0.06] border border-white/10 rounded-lg px-2 py-1.5 focus:outline-none focus:border-purple-500/40"
+                    min={1}
+                    max={allRows.length}
+                  />
+                  <span className="text-[10px] text-white/30">枚に変更</span>
+                  <button
+                    onClick={handleAISelect}
+                    disabled={isSelecting}
+                    className="btn btn-ghost text-[10px] disabled:opacity-50"
+                  >
+                    {isSelecting ? '選定中...' : '再選定'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* キャラクターシート */}
             {characters.length > 0 && (
-              <CharacterSetup characters={characters} onChange={handleCharUpdate} />
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-white/30 uppercase tracking-widest block">
+                  3. キャラクターシート
+                </label>
+                <CharacterSetup
+                  characters={characters}
+                  onChange={handleCharUpdate}
+                  onCostAdd={(cost) => setTextApiCostUSD(prev => prev + cost)}
+                />
+              </div>
             )}
           </div>
         </aside>
@@ -279,8 +387,17 @@ const App: React.FC = () => {
         <main className="flex-1 overflow-y-auto p-5">
           {panels.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full opacity-20 gap-4">
-              <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-              <p className="text-sm">CSVを読み込むとコマ一覧が表示されます</p>
+              {isSelecting ? (
+                <>
+                  <div className="w-10 h-10 border-2 border-purple-500/40 border-t-purple-400 rounded-full animate-spin" />
+                  <p className="text-sm text-purple-300/60">Gemini 3.1 Pro がシーンを厳選中...</p>
+                </>
+              ) : (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                  <p className="text-sm">CSVを読み込むとコマ一覧が表示されます</p>
+                </>
+              )}
             </div>
           ) : (
             <PanelList
@@ -288,6 +405,7 @@ const App: React.FC = () => {
               onRegenerate={handleRegenerate}
               onDownload={handleDownloadSingle}
               onPreview={setPreviewUrl}
+              onPromptEdit={handlePromptEdit}
             />
           )}
         </main>

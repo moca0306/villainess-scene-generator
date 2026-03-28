@@ -1,21 +1,10 @@
 /**
- * 画像生成サービス — Gemini Image API (Nano Banana) のみ
+ * 画像生成サービス — Gemini Image API (Nano Banana 2) のみ
  */
 
 import { GoogleGenAI } from '@google/genai';
-import { ImageModel, Character } from '../types';
 
-const MODELS: Record<ImageModel, string> = {
-  flash: 'gemini-3.1-flash-image-preview',  // Nano Banana 2
-  pro: 'gemini-3-pro-image-preview',         // Nano Banana Pro
-};
-
-let currentModel: ImageModel = 'flash';
-
-export const setModel = (m: ImageModel) => { currentModel = m; };
-export const getModel = () => currentModel;
-export const getModelLabel = () =>
-  currentModel === 'flash' ? 'Nano Banana 2' : 'Nano Banana Pro';
+const MODEL_ID = 'gemini-3.1-flash-image-preview';
 
 /**
  * 画像を1枚生成して base64 data URI を返す
@@ -35,14 +24,18 @@ export const generate = async (
       parts.push({ inlineData: { data, mimeType } });
     }
     parts.push({
-      text: `[${referenceImages.length} REFERENCE IMAGE(S) ABOVE — match these character designs and art style exactly]\n\n`,
+      text: `[${referenceImages.length} REFERENCE IMAGE(S) ABOVE]
+CRITICAL: You MUST match the EXACT art style, line quality, coloring technique, and character design of these reference images.
+The output image MUST look like it belongs to the SAME anime series as the reference images.
+DO NOT change the art style. DO NOT switch to realistic, 3D, Disney, Pixar, or any other style.
+The reference images define the ONLY acceptable art style for this generation.\n\n`,
     });
   }
 
   parts.push({ text: prompt });
 
   const res = await ai.models.generateContent({
-    model: MODELS[currentModel],
+    model: MODEL_ID,
     contents: { parts },
     config: { responseModalities: ['TEXT', 'IMAGE'] },
   });
