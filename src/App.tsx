@@ -26,6 +26,7 @@ const App: React.FC = () => {
   const [isSelecting, setIsSelecting] = useState(false);
   const [targetCount, setTargetCount] = useState(150);
   const [textApiCostUSD, setTextApiCostUSD] = useState(0); // AI選定のテキストAPIコスト累計
+  const [imgGenCount, setImgGenCount] = useState(0); // 画像生成の累計回数（再生成含む）
   const stopRef = useRef(false);
   const pauseRef = useRef(false);
 
@@ -164,6 +165,7 @@ const App: React.FC = () => {
             ? { ...p, imageUrl: url || undefined, status: url ? 'done' : 'error' }
             : p
         ));
+        if (url) setImgGenCount(prev => prev + 1);
       } catch (err) {
         console.error(`Panel ${panel.id} failed:`, err);
         setPanels(prev => prev.map(p =>
@@ -192,6 +194,7 @@ const App: React.FC = () => {
       setPanels(prev => prev.map(p =>
         p.id === id ? { ...p, imageUrl: url || undefined, status: url ? 'done' : 'error' } : p
       ));
+      if (url) setImgGenCount(prev => prev + 1);
     } catch {
       setPanels(prev => prev.map(p => p.id === id ? { ...p, status: 'error' } : p));
     }
@@ -241,7 +244,7 @@ const App: React.FC = () => {
   const doneCount = panels.filter(p => p.status === 'done').length;
 
   // コスト計算（画像生成 + テキストAPI = トータル）
-  const imgDoneUSD = doneCount * COST_PER_IMAGE;
+  const imgDoneUSD = imgGenCount * COST_PER_IMAGE;
   const imgEstimateUSD = panels.length * COST_PER_IMAGE;
   const totalSpentUSD = imgDoneUSD + textApiCostUSD;
   const totalEstimateUSD = imgEstimateUSD + textApiCostUSD;
@@ -271,7 +274,7 @@ const App: React.FC = () => {
                 見積: <span className="text-yellow-400 font-bold">¥{totalEstimateJPY.toLocaleString()}</span>
                 <span className="text-white/20 ml-1">(${totalEstimateUSD.toFixed(2)})</span>
               </div>
-              {(doneCount > 0 || textApiCostUSD > 0) && (
+              {(imgGenCount > 0 || textApiCostUSD > 0) && (
                 <div className="text-white/20">
                   使用済: <span className="text-yellow-400/70">¥{totalSpentJPY.toLocaleString()}</span>
                   <span className="ml-1">(${totalSpentUSD.toFixed(2)})</span>
@@ -281,7 +284,7 @@ const App: React.FC = () => {
                 {textApiCostUSD > 0 && (
                   <span>AI選定: ${textApiCostUSD.toFixed(3)}</span>
                 )}
-                <span>画像: ${doneCount > 0 ? imgDoneUSD.toFixed(2) : imgEstimateUSD.toFixed(2)}{doneCount === 0 ? '(見積)' : ''}</span>
+                <span>画像: ${imgGenCount > 0 ? imgDoneUSD.toFixed(2) : imgEstimateUSD.toFixed(2)}{imgGenCount === 0 ? '(見積)' : `(${imgGenCount}回)`}</span>
               </div>
             </div>
           )}
